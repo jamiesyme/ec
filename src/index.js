@@ -126,6 +126,7 @@ Commands:
   init        Configure new container
   login       Auto-start and log into container
   provision   Bootstrap container
+  stop        Stop container if running
 
 Options:
       --container   Bypass cwd-based container lookup
@@ -159,6 +160,15 @@ async function findContainerByCwd (cwd)
 
 	const [path, container] = findNearestKeyValueInPathMap(projectMap, cwd);
 	return container ?? null;
+}
+
+async function getContainerByCwd (cwd)
+{
+	const name = await findContainerByCwd(cwd);
+	if (!name) {
+		return log('No container found within current directory.');
+	}
+	return name;
 }
 
 async function loadContainerConfig (name)
@@ -221,8 +231,10 @@ async function startContainer (name)
 	await lxdFetch(`${json.operation}/wait`);
 }
 
-async function autoStartContainer (name)
+async function autoStartContainer (name = null)
 {
+	name = name ?? await getContainerByCwd(cwd());
+
 	const status = await getContainerStatus(name);
 	if (status === 'running') {
 		return;
@@ -231,15 +243,33 @@ async function autoStartContainer (name)
 	await startContainer(name);
 }
 
+async function stopContainer (name)
+{
+	let res = await lxdFetch(`/1.0/instances/${name}/state`, {
+		method : 'PUT',
+		json   : { action: 'stop' },
+	});
+	let json = await res.json();
+
+	// json.operation == '/1.0/operations/66e83638-9dd7-4a26-aef2-5462814869a1'
+	await lxdFetch(`${json.operation}/wait`);
+}
+
+async function autoStopContainer (name = null)
+{
+	name = name ?? await getContainerByCwd(cwd());
+
+	const status = await getContainerStatus(name);
+	if (status !== 'running') {
+		return;
+	}
+
+	await stopContainer(name);
+}
+
 async function logIntoContainer (name = null)
 {
-	if (!name) {
-		name = await findContainerByCwd(cwd());
-
-		if (!name) {
-			return log('No container found within current directory.');
-		}
-	}
+	name = name ?? await getContainerByCwd(cwd());
 
 	await autoStartContainer(name);
 
@@ -347,13 +377,7 @@ async function initContainer (name = null)
 
 async function provisionContainer (name = null)
 {
-	if (!name) {
-		name = await findContainerByCwd(cwd());
-
-		if (!name) {
-			return log('No container found within current directory.');
-		}
-	}
+	name = name ?? await getContainerByCwd(cwd());
 
 	const config = await loadContainerConfig(name);
 
@@ -435,6 +459,9 @@ async function main ()
 
 		case 'provision':
 			return await provisionContainer(args['--container']);
+
+		case 'stop':
+			return await autoStopContainer(args['--container']);
 
 		default:
 			return log(`Unknown command: "${cmd}"`);
