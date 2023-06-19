@@ -381,12 +381,14 @@ async function provisionContainer (name = null)
 
 	const config = await loadContainerConfig(name);
 
+	// Create container
 	await spawnPtAsync('lxc', [
-		'init', 'ubuntu-minimal:focal', name,
+		'init', 'ubuntu-minimal:lts', name,
 		'-p', 'default',
 		'-p', 'ubuntu-mapped',
 	]);
 
+	// Create mounts
 	for (const [src, dest] of Object.entries(config.mounts)) {
 		const deviceName = dest;
 		await spawnPtAsync('lxc', [
@@ -401,26 +403,36 @@ async function provisionContainer (name = null)
 		]);
 	}
 
-	const bsRootPath = Path.join(getContainerPath(name), 'bootstrap-root.sh');
-	const bsUserPath = Path.join(getContainerPath(name), 'bootstrap-user.sh');
-	await spawnPtAsync('lxc', ['file', 'push', bsRootPath, `${name}/opt/`]);
-	await spawnPtAsync('lxc', ['file', 'push', bsUserPath, `${name}/opt/`]);
-
+	// Start container
 	await autoStartContainer(name);
 
+	// Copy bootstrap files into /opt/ec
+	for (const fileBasename of await readdir(getContainerPath(name))) {
+		await spawnPtAsync('lxc', [
+			'file', 'push', '--create-dirs',
+			Path.join(getContainerPath(name), fileBasename),
+			`${name}/opt/ec/`,
+		]);
+	}
+
+	// Wait for internet
 	await spawnPtAsync('lxc', [
 		'exec', name, '--',
 		'bash', '-c',
 		'while ! curl -Ifsm1 google.com >/dev/null; do sleep 0.5; done',
 	]);
+
+	// Bootstrap
 	await spawnPtAsync('lxc', [
-		'exec', name, '--',
-		'/opt/bootstrap-root.sh',
+		'exec', name, '--cwd', '/opt/ec', '--',
+		'/opt/ec/bootstrap-root.sh',
 	]);
 	await spawnPtAsync('lxc', [
-		'exec', name, '--',
-		'su -lc /opt/bootstrap-user.sh ubuntu',
+		'exec', name, '--cwd', '/opt/ec', '--',
+		'su', '-l', '-c', '/opt/ec/bootstrap-user.sh', 'ubuntu',
 	]);
+
+	// Add EC_INITIAL_DIR to allow smart cwd logins
 	await spawnPtAsync('lxc', [
 		'exec', name, '--',
 		'bash', '-c',
